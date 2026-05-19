@@ -265,4 +265,8 @@ def permutation(model, model_type, model_config, groupsize):
     if model_type == "deepseek":
         permute_deepseek(model, ratio=0.2, final_group_size=groupsize, config=model_config)
     elif model_type == "qwen":
+        from utils.model_utils import is_qwen_moe
+        if not is_qwen_moe(model):
+            print("[INFO] skip permutation for dense Qwen (no MoE experts)")
+            return
         permute_qwen(model, ratio=0.2, final_group_size=groupsize, config=model_config)

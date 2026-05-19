@@ -65,6 +65,7 @@ modify the following configuration parameters:
 - common_setting:
   * `weight_group_size`: The group size for weight clustering. Set it to `-1` for embedding-wise setup. 
   * `input_group_size`: The group size for activation quantization. Set it to `-1` for embedding-wise setup.
+  * `activation_quantization_format` (optional): Same formats as eval; used during rotation fine-tune (AOS) when set. R1 checkpoints are saved/loaded as `{model}_r1_{group|nongroup}_act_{format}.pt` (e.g. `_act_fp8e4m3`); omit the key to keep the legacy `{model}_r1_{group|nongroup}.pt` name.
 - cluster:
   * `permutation`: The switch for POG. Set it to `True` for POG.
   * `max_sample`: The number of calibration samples to use for clustering fine-tune (ACCF).
@@ -79,10 +80,26 @@ modify the following configuration parameters:
   * `epochs`: The number of epochs for rotation fine-tune (AOS).
   * `fine_tune_lr`: The learning rate for rotation fine-tune (AOS). Don't use scientific notation here (e.g. `1e-3`). Use decimal notation instead (e.g. `0.001`).
 - eval:
-  * `activation_quantization_bit`: The bitwidth for activation quantization.
+  * `activation_quantization_bit`: The bitwidth for activation quantization (integer fake-quant).
+  * `activation_quantization_format` (optional): FP8/NVFP4 activation fake-quant format. One of `fp8_e4m3`, `fp8_e5m2`, `e4m3`, `e5m2`, `nvfp4`, `nvfp4_plus`. When set, overrides integer activation quant during eval; weight quant is unchanged.
   * `weight_quantization_bit`: The bitwidth for weight quantization. This is only used for benchmark evaluation. If you evaluate a clustered model, this parameter will not be used.
   * `tasks`: The evaluation tasks. Use the format `task1,task2,...,taskN` where each task following naming convention of [lm-eval](https://github.com/EleutherAI/lm-evaluation-harness).
   * `ppls`: The perplexity tasks. Use the format `ppl1,ppl2,...,pplN` where each task is a huggingface dataset path.
+
+### Qwen3-4B FP8 / NVFP4 presets (`configs/qwen3_4_act_*`)
+
+Based on `qwen3_4.yaml`. Each preset sets `activation_quantization_format` in `common_setting` and `eval`.
+
+| Config | Format | Granularity (`input_group_size`) |
+|--------|--------|----------------------------------|
+| `qwen3_4_act_fp8_e4m3_{perchannel,perblock}` | fake FP8 E4M3 | `-1` / `128` |
+| `qwen3_4_act_fp8_e5m2_{perchannel,perblock}` | fake FP8 E5M2 | `-1` / `128` |
+| `qwen3_4_act_e4m3_{perchannel,perblock}` | native `float8_e4m3fn` cast | `-1` / `128` |
+| `qwen3_4_act_e5m2_{perchannel,perblock}` | native `float8_e5m2` cast | `-1` / `128` |
+| `qwen3_4_act_nvfp4_{perchannel,perblock}` | NVFP4 E2M1 | `-1` / `128` |
+| `qwen3_4_act_nvfp4_plus_{perchannel,perblock}` | NVFP4 + FP8 scale | `-1` / `128` |
+
+Example: `python evaluation_script.py --config qwen3_4_act_fp8_e4m3_perchannel.yaml` (from `script/`). R1 cache: `qwen_r1_nongroup_act_fp8e4m3.pt` (perchannel) or `qwen_r1_group_act_fp8e4m3.pt` (perblock).
 
 
 ## 📚Citation

@@ -23,8 +23,9 @@ except ImportError:
 from cluster.ClusterMoE import ClusterMoE, ClusterMoE_deepseek
 from utils.dataset_utils import CalibrationDataset
 from utils.rotation_utils import fuse_rotation, fuse_weight, load_or_create_R1
-from utils.model_utils import get_model
+from utils.model_utils import get_model, is_qwen_moe
 from utils.permutation_utils import permutation
+from utils.quantization_utils import group_postfix, r1_checkpoint_filename
 
 
 def replace_moe(model: nn.Module,
@@ -77,6 +78,8 @@ def replace_moe(model: nn.Module,
                     continue
 
                 if isinstance(sub, nn.Module):
+                    if model_type == "qwen" and not hasattr(sub, "experts"):
+                        continue
                     wrapped_moe = ClusterMoE(
                         moe_module=sub,
                         calibration_mode=True,
@@ -103,7 +106,11 @@ def replace_linear(model: nn.Module,
         ffn_names = {"gate", "w1", "w3"}
     elif model_type == "qwen":
         sa_names = {"q_proj", "k_proj", "v_proj"}
-        ffn_names = {"gate", "gate_proj", "up_proj"}
+        if is_qwen_moe(model):
+            ffn_names = {"gate", "gate_proj", "up_proj"}
+        else:
+            ffn_names = {"gate_proj", "up_proj"}
+            # ffn_names = {"gate_proj", "up_proj", "down_proj"}
     elif model_type == "mixtral":
         sa_names = {"q_proj", "k_proj", "v_proj"}
         ffn_names = {"gate", "w1", "w3"}
@@ -400,16 +407,15 @@ if __name__ == "__main__":
     fuse_weight(model, model_type)
     print(f"[INFO] model {model_name} fused.")
 
-    # group size
+    # load rotation R1 (suffix reflects AOS activation quant in common_setting)
     input_group_size = config["common_setting"]["input_group_size"]
-    if input_group_size == -1:
-        postfix = "nongroup"
-    else:
-        postfix = "group"
-
-    # load rotation R1
+    r1_act_format = config["common_setting"].get("activation_quantization_format")
     rotation_save_path = config["path"]["rotation_data_path"]
-    R1_save_dir = os.path.join(rotation_save_path, f"{model_type}_r1_{postfix}.pt")
+    R1_save_dir = os.path.join(
+        rotation_save_path,
+        r1_checkpoint_filename(model_type, input_group_size, r1_act_format),
+    )
+    postfix = group_postfix(input_group_size)
     R1 = load_or_create_R1(mode="offline", device=device, save_dir=R1_save_dir)
     R1 = R1.weight.detach()
 

@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from utils.rotation_utils import load_or_create_R1, create_optimizer
 from utils.dataset_utils import CalibrationDataset
-from utils.quantization_utils import activation_quantizer
+from utils.quantization_utils import activation_quantizer, r1_checkpoint_filename
 from utils.rotation_utils import fuse_weight
 from utils.model_utils import get_model
 
@@ -24,7 +24,8 @@ def rotation_fine_tune_hook(module_name: str,
                             R: nn.Module,
                             activation_quantization_bit: int,
                             group_size: int,
-                            loss_dict: dict):
+                            loss_dict: dict,
+                            activation_format: str = None):
 
     def hook(module: nn.Module,
              input_args: Tuple[torch.Tensor, ...],
@@ -39,7 +40,10 @@ def rotation_fine_tune_hook(module_name: str,
             rmsnorm_output.requires_grad_(True)
 
             rot_output = rmsnorm_output.float() @ R.weight.to(rmsnorm_output.device)
-            quant_rot_output = activation_quantizer((rot_output, ), group_size, activation_quantization_bit)
+            quant_rot_output = activation_quantizer(
+                (rot_output,), group_size, activation_quantization_bit,
+                activation_format=activation_format,
+            )
             loss_dict[module_name] = F.mse_loss(rot_output, quant_rot_output)
         elif mode == "input":
             if len(input_args) > 0 and isinstance(input_args[0], torch.Tensor):
@@ -52,7 +56,10 @@ def rotation_fine_tune_hook(module_name: str,
             expand_R = R.weight
 
             rot_input = rmsnorm_input.float() @ expand_R.to(rmsnorm_input.device)
-            quant_rot_input = activation_quantizer((rot_input, ), group_size, activation_quantization_bit)
+            quant_rot_input = activation_quantizer(
+                (rot_input,), group_size, activation_quantization_bit,
+                activation_format=activation_format,
+            )
             loss_dict[module_name] = F.mse_loss(rot_input, quant_rot_input)
     return hook
 
@@ -63,6 +70,7 @@ def rotation_fine_tune(model: nn.Module,
                        processor: nn.Module,
                        input_group_size: int,
                        activation_quantization_bit: int,
+                       activation_format: str = None,
                        dataset_name: str,
                        calibration_samples: int,
                        batch_size: int,
@@ -85,7 +93,10 @@ def rotation_fine_tune(model: nn.Module,
     handles = {}
     for name, module in model.named_modules():
         if output_regex.search(name):
-            hook = rotation_fine_tune_hook(name, "output", R1, activation_quantization_bit, input_group_size, R1_loss_dict)
+            hook = rotation_fine_tune_hook(
+                name, "output", R1, activation_quantization_bit, input_group_size,
+                R1_loss_dict, activation_format=activation_format,
+            )
             handles[name] = module.register_forward_hook(hook)
             print(f"[DEBUG] register output hook for {name}")
 
@@ -181,12 +192,17 @@ if __name__ == "__main__":
     os.makedirs(save_path, exist_ok=True)
 
     # run
+    activation_quantization_format = common_params.get("activation_quantization_format")
+    if activation_quantization_format:
+        print(f'[INFO] activation quantization format: {activation_quantization_format}')
+
     r1 = rotation_fine_tune(model=model,
                             model_type=model_type,
                             tokenizer=tokenizer,
                             processor=processor,
                             input_group_size=common_params["input_group_size"],
                             activation_quantization_bit=common_params["activation_quantization_bit"],
+                            activation_format=activation_quantization_format,
                             dataset_name=dataset_name,
                             calibration_samples=rotate_params["max_sample"],
                             batch_size=rotate_params["batch_size"],
@@ -195,15 +211,14 @@ if __name__ == "__main__":
                             lr=rotate_params["fine_tune_lr"],
                             device=device)
 
-    # group size
-    input_group_size = common_params["input_group_size"]
-    if input_group_size == -1:
-        postfix = "nongroup"
-    else:
-        postfix = "group"
-
+    r1_ckpt_name = r1_checkpoint_filename(
+        model_type,
+        common_params["input_group_size"],
+        activation_quantization_format,
+    )
     r1_ckpt = {
         "r1": r1.cpu().state_dict(),
         "dim": model.config.hidden_size,
     }
-    torch.save(r1_ckpt, os.path.join(save_path, f"{model_type}_r1_{postfix}.pt"))
+    torch.save(r1_ckpt, os.path.join(save_path, r1_ckpt_name))
+    print(f"[INFO] R1 saved to {os.path.join(save_path, r1_ckpt_name)}")

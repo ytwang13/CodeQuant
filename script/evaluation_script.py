@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from utils.evaluation_utils import evaluation
+from utils.quantization_utils import group_postfix, r1_checkpoint_filename
 from utils.model_utils import get_model, replace_model_weight
 from utils.rotation_utils import fuse_rotation, fuse_weight, load_or_create_R1
 from utils.permutation_utils import permutation
@@ -42,6 +43,9 @@ if __name__ == "__main__":
     # eval config
     activation_quantization_bit = config["eval"]["activation_quantization_bit"]
     print(f'[INFO] activation quantization bit: {activation_quantization_bit}')
+    activation_quantization_format = config["eval"].get("activation_quantization_format")
+    if activation_quantization_format:
+        print(f'[INFO] activation quantization format: {activation_quantization_format}')
     weight_quantization_bit = config["eval"]["weight_quantization_bit"]
     print(f'[INFO] weight quantization bit: {weight_quantization_bit}')
     activation_group_size = config["common_setting"]["input_group_size"]
@@ -53,16 +57,15 @@ if __name__ == "__main__":
     fuse_weight(model, model_type)
     print(f"[INFO] model {model_name} RMSNorm weight fused.")
 
-    # group size
+      # load rotation R1 (suffix reflects AOS activation quant in common_setting)
     input_group_size = config["common_setting"]["input_group_size"]
-    if input_group_size == -1:
-        postfix = "nongroup"
-    else:
-        postfix = "group"
-
-    # load rotation R1
+    r1_act_format = config["common_setting"].get("activation_quantization_format")
     rotation_save_path = config["path"]["rotation_data_path"]
-    R1_save_dir = os.path.join(rotation_save_path, f"{model_type}_r1_{postfix}.pt")
+    R1_save_dir = os.path.join(
+        rotation_save_path,
+        r1_checkpoint_filename(model_type, input_group_size, r1_act_format),
+    )
+    postfix = group_postfix(input_group_size)
     R1 = load_or_create_R1(mode="offline", device=device, save_dir=R1_save_dir)
     R1 = R1.weight.detach()
 
@@ -108,6 +111,7 @@ if __name__ == "__main__":
                                                           ppls=ppls,
                                                           quantization_bit=activation_quantization_bit,
                                                           input_group_size=activation_group_size,
+                                                          activation_format=activation_quantization_format,
                                                           is_baseline=False)
     print(str(activation_quantization_bit))
     print(ppl_results)

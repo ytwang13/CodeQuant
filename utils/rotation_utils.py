@@ -153,10 +153,13 @@ def rotate_mlp_input(layer, rotation_cache, model_type):
     # Rotate the MLP input weights.
     if model_type == "qwen":
         mlp_inputs = []
-        for expert in layer.mlp.experts:
-            mlp_inputs.append(expert.up_proj)
-            mlp_inputs.append(expert.gate_proj)
-        mlp_inputs.append(layer.mlp.gate)
+        if hasattr(layer.mlp, "experts"):
+            for expert in layer.mlp.experts:
+                mlp_inputs.append(expert.up_proj)
+                mlp_inputs.append(expert.gate_proj)
+            mlp_inputs.append(layer.mlp.gate)
+        else:
+            mlp_inputs.extend([layer.mlp.up_proj, layer.mlp.gate_proj])
 
     elif model_type == "mixtral":
         mlp_inputs = []
@@ -198,9 +201,10 @@ def rotate_mlp_input(layer, rotation_cache, model_type):
 def rotate_mlp_output(layer, rotation_cache, model_type):
     # Rotate the MLP output weights and bias.
     if model_type == "qwen":
-        W = []
-        for expert in layer.mlp.experts:
-            W.append(expert.down_proj)
+        if hasattr(layer.mlp, "experts"):
+            W = [expert.down_proj for expert in layer.mlp.experts]
+        else:
+            W = layer.mlp.down_proj
     elif model_type == "mixtral":
         W = []
         for expert in layer.block_sparse_moe.experts:
@@ -440,19 +444,24 @@ def fuse_weight(model: nn.Module, model_name: str):
             post_norm = getattr(layer, "post_attention_layernorm")
             scale = post_norm.weight.detach()
 
-            moe = getattr(layer, "mlp")
-            router = getattr(moe, "gate")
-            if isinstance(router, nn.Linear):
-                _fuse_scale_into_linear(router, scale)
+            mlp = getattr(layer, "mlp")
+            if hasattr(mlp, "experts"):
+                router = getattr(mlp, "gate")
+                if isinstance(router, nn.Linear):
+                    _fuse_scale_into_linear(router, scale)
 
-            experts = getattr(moe, "experts")
-            for expert in experts:
-                up = getattr(expert, "up_proj")
-                gate = getattr(expert, "gate_proj")
-                if isinstance(up, nn.Linear):
-                    _fuse_scale_into_linear(up, scale)
-                if isinstance(gate, nn.Linear):
-                    _fuse_scale_into_linear(gate, scale)
+                for expert in mlp.experts:
+                    up = getattr(expert, "up_proj")
+                    gate = getattr(expert, "gate_proj")
+                    if isinstance(up, nn.Linear):
+                        _fuse_scale_into_linear(up, scale)
+                    if isinstance(gate, nn.Linear):
+                        _fuse_scale_into_linear(gate, scale)
+            else:
+                for proj_name in ("gate_proj", "up_proj"):
+                    proj = getattr(mlp, proj_name)
+                    if isinstance(proj, nn.Linear):
+                        _fuse_scale_into_linear(proj, scale)
             _set_rms_weight_ones(post_norm)
         elif model_name == "mixtral":
             post_norm = getattr(layer, "post_attention_layernorm")

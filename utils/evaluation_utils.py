@@ -1,5 +1,5 @@
 import re
-from typing import Union
+from typing import Optional, Union
 
 import torch
 import torch.nn as nn
@@ -10,6 +10,7 @@ from lm_eval.models.huggingface import HFLM
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
+from utils.model_utils import is_qwen_moe
 from utils.quantization_utils import int_activation_quantization_pre_hook
 
 
@@ -31,7 +32,8 @@ def evaluate_model(model: nn.Module,
             if "c4" in dataset:
                 testdata = load_dataset(
                     dataset,
-                    "en",
+                    # "en",
+                    data_files={"validation": "en/c4-validation.00000-of-00008.json.gz"},
                     split="validation",
                 )
                 testloader = tokenizer(' '.join(testdata[:1100]['text']), return_tensors='pt')
@@ -89,10 +91,15 @@ def evaluation(model: nn.Module,
                ppls: str,
                quantization_bit: int,
                input_group_size: int,
+               activation_format: Optional[str] = None,
                is_baseline: bool = False):
     if not is_baseline:
         if model_type == "qwen":
-            pattern = r".*(q_proj|k_proj|v_proj|gate|gate_proj|up_proj).*"
+            if is_qwen_moe(model):
+                pattern = r".*(q_proj|k_proj|v_proj|gate|gate_proj|up_proj).*"
+            else:
+                pattern = r".*(q_proj|k_proj|v_proj|gate_proj|up_proj).*"
+                # pattern = r".*(q_proj|k_proj|v_proj|gate_proj|up_proj|down_proj).*"
         elif model_type == "mixtral":
             pattern = r".*(q_proj|k_proj|v_proj|gate|w1|w3).*"
         elif model_type == "deepseek":
@@ -104,7 +111,8 @@ def evaluation(model: nn.Module,
                 hook = int_activation_quantization_pre_hook(module_name=name,
                                                         quantization_bit=quantization_bit,
                                                         input_group_size=input_group_size,
-                                                        output_dict=None)
+                                                        output_dict=None,
+                                                        activation_format=activation_format)
                 module.register_forward_pre_hook(hook)
 
     ppl_results, task_results, clean_results = evaluate_model(model,

@@ -1,0 +1,35 @@
+# Qwen3-4B CodeQuant: activation fp8_e5m2, perchannel (input_group_size=-1).
+accelerator:
+  device: "cuda"
+path:
+  rotation_data_path: "./data/rotation"
+  cluster_data_path: "./data/clustering"
+model:
+  model_name: "Qwen/Qwen3-4B"
+calibration:
+  dataset_name: "Self-GRIT/wikitext-2-raw-v1-preprocessed"
+common_setting:
+  weight_group_size: -1
+  input_group_size: -1
+  cluster_num: 16
+  activation_quantization_bit: 4
+  activation_quantization_format: fp8_e5m2
+cluster:
+  permutation: false
+  max_sample: 512
+  batch_size: 32
+  max_length: 256
+  epochs: 4
+  fine_tune_lr: 0.0001
+rotation:
+  max_sample: 512
+  batch_size: 16
+  max_length: 256
+  epochs: 4
+  fine_tune_lr: 0.0001
+eval:
+  activation_quantization_bit: 4
+  weight_quantization_bit: 4
+  tasks: "piqa,hellaswag,arc_easy,arc_challenge,mmlu,winogrande"
+  ppls: "allenai/c4,Self-GRIT/wikitext-2-raw-v1-preprocessed"
+  activation_quantization_format: fp8_e5m2

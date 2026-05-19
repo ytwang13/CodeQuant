@@ -8,9 +8,15 @@ from accelerate import dispatch_model
 model_prefix_dict = {
     "microsoft/Phi-mini-MoE-instruct": "phi",
     "Qwen/Qwen3-30B-A3B": "qwen",
+    "Qwen/Qwen3-4B": "qwen",
     "mistralai/Mixtral-8x7B-v0.1": "mixtral",
     "deepseek-ai/DeepSeek-V2-Lite": "deepseek",
 }
+
+
+def is_qwen_moe(model: nn.Module) -> bool:
+    """True for Qwen MoE (layer.mlp.experts); False for dense Qwen3 MLP."""
+    return hasattr(model.model.layers[0].mlp, "experts")
 
 
 def make_gpu_map(num_layers: int, num_devices: int):
