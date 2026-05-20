@@ -19,6 +19,16 @@ def is_qwen_moe(model: nn.Module) -> bool:
     return hasattr(model.model.layers[0].mlp, "experts")
 
 
+def is_qwen_fused_moe_experts(experts: nn.Module) -> bool:
+    """HF Qwen3 MoE: ``Qwen3MoeExperts`` with stacked ``gate_up_proj`` / ``down_proj``."""
+    return hasattr(experts, "gate_up_proj") and hasattr(experts, "down_proj")
+
+
+def qwen_mlp_experts(mlp: nn.Module) -> nn.Module | None:
+    """Return ``mlp.experts`` when present."""
+    return getattr(mlp, "experts", None)
+
+
 def make_gpu_map(num_layers: int, num_devices: int):
     dm = {"model.embed_tokens": 0}
     layers_per_device = num_layers // num_devices

@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -70,14 +70,14 @@ def rotation_fine_tune(model: nn.Module,
                        processor: nn.Module,
                        input_group_size: int,
                        activation_quantization_bit: int,
-                       activation_format: str = None,
                        dataset_name: str,
                        calibration_samples: int,
                        batch_size: int,
                        max_length: int,
                        epochs: int,
                        lr: float,
-                       device: str):
+                       device: str,
+                       activation_format: Optional[str] = None):
     # create rotation matrix
     # R1
     R1 = load_or_create_R1(mode="online",

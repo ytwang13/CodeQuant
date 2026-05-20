@@ -3,6 +3,8 @@ import torch.nn as nn
 
 from tqdm import tqdm
 
+from utils.model_utils import is_qwen_fused_moe_experts
+
 
 def load_or_create_R1(mode: str,
                       device: str,
@@ -153,11 +155,15 @@ def rotate_mlp_input(layer, rotation_cache, model_type):
     # Rotate the MLP input weights.
     if model_type == "qwen":
         mlp_inputs = []
-        if hasattr(layer.mlp, "experts"):
-            for expert in layer.mlp.experts:
-                mlp_inputs.append(expert.up_proj)
-                mlp_inputs.append(expert.gate_proj)
-            mlp_inputs.append(layer.mlp.gate)
+        experts_mod = getattr(layer.mlp, "experts", None)
+        if experts_mod is not None:
+            if is_qwen_fused_moe_experts(experts_mod):
+                mlp_inputs.append(layer.mlp.gate)
+            else:
+                for expert in experts_mod:
+                    mlp_inputs.append(expert.up_proj)
+                    mlp_inputs.append(expert.gate_proj)
+                mlp_inputs.append(layer.mlp.gate)
         else:
             mlp_inputs.extend([layer.mlp.up_proj, layer.mlp.gate_proj])
 
@@ -197,12 +203,25 @@ def rotate_mlp_input(layer, rotation_cache, model_type):
         W.weight.data = torch.matmul(W_, R1).to(device=device, dtype=dtype)
         del W_
 
+    if model_type == "qwen":
+        experts_mod = getattr(layer.mlp, "experts", None)
+        if experts_mod is not None and is_qwen_fused_moe_experts(experts_mod):
+            device = experts_mod.gate_up_proj.device
+            R1 = rotation_cache[str(device)]
+            _rotate_qwen_fused_gate_up(experts_mod.gate_up_proj, R1)
+
 
 def rotate_mlp_output(layer, rotation_cache, model_type):
     # Rotate the MLP output weights and bias.
     if model_type == "qwen":
-        if hasattr(layer.mlp, "experts"):
-            W = [expert.down_proj for expert in layer.mlp.experts]
+        experts_mod = getattr(layer.mlp, "experts", None)
+        if experts_mod is not None:
+            if is_qwen_fused_moe_experts(experts_mod):
+                device = experts_mod.down_proj.device
+                R1 = rotation_cache[str(device)]
+                _rotate_qwen_fused_down_proj(experts_mod.down_proj, R1)
+                return
+            W = [expert.down_proj for expert in experts_mod]
         else:
             W = layer.mlp.down_proj
     elif model_type == "mixtral":
@@ -388,6 +407,27 @@ def fuse_rotation(model: nn.Module, model_type, r1_rotation_cache, r2_rotation_d
         # print(f"[Layer {idx}] CPU Memory usage: {get_memory_usage_mb():.2f} MB")
 
 
+def _fuse_scale_into_qwen_fused_gate_up(gate_up_proj: torch.Tensor, scale: torch.Tensor) -> None:
+    """Fuse RMSNorm scale into fused expert ``gate_up_proj`` [E, 2*I, H]."""
+    if gate_up_proj.shape[-1] != scale.numel():
+        return
+    gate_up_proj.mul_(scale.view(1, 1, -1).to(gate_up_proj.device, dtype=gate_up_proj.dtype))
+
+
+def _rotate_qwen_fused_gate_up(gate_up_proj: torch.Tensor, R1: torch.Tensor) -> None:
+    device, dtype = gate_up_proj.device, gate_up_proj.dtype
+    W = gate_up_proj.data.to(device=device, dtype=torch.float64)
+    R = R1.to(device=device, dtype=torch.float64)
+    gate_up_proj.data = torch.matmul(W, R).to(device=device, dtype=dtype)
+
+
+def _rotate_qwen_fused_down_proj(down_proj: torch.Tensor, R1: torch.Tensor) -> None:
+    device, dtype = down_proj.device, down_proj.dtype
+    W = down_proj.data.to(device=device, dtype=torch.float64)
+    R = R1.to(device=device, dtype=torch.float64)
+    down_proj.data = torch.einsum("ij,ejk->eik", R.T, W).to(device=device, dtype=dtype)
+
+
 def _fuse_scale_into_linear(linear: nn.Linear, scale: torch.Tensor):
     """
     Fold an elementwise input scale (RMSNorm weight) into a Linear's weight.
@@ -445,18 +485,22 @@ def fuse_weight(model: nn.Module, model_name: str):
             scale = post_norm.weight.detach()
 
             mlp = getattr(layer, "mlp")
-            if hasattr(mlp, "experts"):
+            experts_mod = getattr(mlp, "experts", None)
+            if experts_mod is not None:
                 router = getattr(mlp, "gate")
                 if isinstance(router, nn.Linear):
                     _fuse_scale_into_linear(router, scale)
 
-                for expert in mlp.experts:
-                    up = getattr(expert, "up_proj")
-                    gate = getattr(expert, "gate_proj")
-                    if isinstance(up, nn.Linear):
-                        _fuse_scale_into_linear(up, scale)
-                    if isinstance(gate, nn.Linear):
-                        _fuse_scale_into_linear(gate, scale)
+                if is_qwen_fused_moe_experts(experts_mod):
+                    _fuse_scale_into_qwen_fused_gate_up(experts_mod.gate_up_proj.data, scale)
+                else:
+                    for expert in experts_mod:
+                        up = getattr(expert, "up_proj")
+                        gate = getattr(expert, "gate_proj")
+                        if isinstance(up, nn.Linear):
+                            _fuse_scale_into_linear(up, scale)
+                        if isinstance(gate, nn.Linear):
+                            _fuse_scale_into_linear(gate, scale)
             else:
                 for proj_name in ("gate_proj", "up_proj"):
                     proj = getattr(mlp, proj_name)

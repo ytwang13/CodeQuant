@@ -12,6 +12,9 @@ CONFIG="${CONFIG:-qwen3.yaml}"
 STEP="${1:-all}"
 
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
+# export CUDA_VISIBLE_DEVICES=0,1
+export HF_HOME=/mnt/hdd/wyt/hf
+
 cd "${SCRIPT_DIR}"
 
 run_rotation() {
