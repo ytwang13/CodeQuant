@@ -14,7 +14,7 @@ CONFIG="${CONFIG:-qwen3_4_c2_think.yaml}"
 STEP="${1:-all}"
 
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
-export CUDA_VISIBLE_DEVICES=2,3 # 4b only uses one GPU
+export CUDA_VISIBLE_DEVICES=0,1 # 4b only uses one GPU
 export HF_HOME=/mnt/hdd/wyt/hf
 
 cd "${SCRIPT_DIR}"

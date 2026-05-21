@@ -19,48 +19,33 @@ from utils.rotation_utils import fuse_weight
 from utils.model_utils import get_model
 
 
-def rotation_fine_tune_hook(module_name: str,
+def collect_activation_hook(module_name: str,
                             mode: str,
-                            R: nn.Module,
-                            activation_quantization_bit: int,
-                            group_size: int,
-                            loss_dict: dict,
-                            activation_format: str = None):
+                            activation_dict: dict):
+    """Collect detached activations only — no grad graph on the frozen model."""
 
     def hook(module: nn.Module,
              input_args: Tuple[torch.Tensor, ...],
              output_tensor_or_tuple: Union[torch.Tensor, Tuple]) -> None:
         if mode == "output":
             if isinstance(output_tensor_or_tuple, torch.Tensor):
-                rmsnorm_output = output_tensor_or_tuple.detach()
+                act = output_tensor_or_tuple.detach()
             elif isinstance(output_tensor_or_tuple, tuple):
                 if len(output_tensor_or_tuple) > 0 and isinstance(output_tensor_or_tuple[0], torch.Tensor):
-                    rmsnorm_output = output_tensor_or_tuple[0].detach()
-
-            rmsnorm_output.requires_grad_(True)
-
-            rot_output = rmsnorm_output.float() @ R.weight.to(rmsnorm_output.device)
-            quant_rot_output = activation_quantizer(
-                (rot_output,), group_size, activation_quantization_bit,
-                activation_format=activation_format,
-            )
-            loss_dict[module_name] = F.mse_loss(rot_output, quant_rot_output)
+                    act = output_tensor_or_tuple[0].detach()
+                else:
+                    return
+            else:
+                return
+            activation_dict[module_name] = act
         elif mode == "input":
             if len(input_args) > 0 and isinstance(input_args[0], torch.Tensor):
-                rmsnorm_input = input_args[0].detach()
+                act = input_args[0].detach()
             elif isinstance(input_args, torch.Tensor):
-                rmsnorm_input= input_args.detach()
-
-            rmsnorm_input.requires_grad_(True)
-            # expand_R = torch.block_diag(*([R.weight] * num_attention_heads))
-            expand_R = R.weight
-
-            rot_input = rmsnorm_input.float() @ expand_R.to(rmsnorm_input.device)
-            quant_rot_input = activation_quantizer(
-                (rot_input,), group_size, activation_quantization_bit,
-                activation_format=activation_format,
-            )
-            loss_dict[module_name] = F.mse_loss(rot_input, quant_rot_input)
+                act = input_args.detach()
+            else:
+                return
+            activation_dict[module_name] = act
     return hook
 
 
@@ -78,29 +63,14 @@ def rotation_fine_tune(model: nn.Module,
                        lr: float,
                        device: str,
                        activation_format: Optional[str] = None):
-    # create rotation matrix
-    # R1
     R1 = load_or_create_R1(mode="online",
                            device=device,
                            dim=model.config.hidden_size)
     R1_optimizer = create_optimizer(R1, lr=lr)
 
-    # register hook
     output_name_pattern = r".*(input_layernorm|post_attention_layernorm).*"
     output_regex = re.compile(output_name_pattern)
 
-    R1_loss_dict = {}
-    handles = {}
-    for name, module in model.named_modules():
-        if output_regex.search(name):
-            hook = rotation_fine_tune_hook(
-                name, "output", R1, activation_quantization_bit, input_group_size,
-                R1_loss_dict, activation_format=activation_format,
-            )
-            handles[name] = module.register_forward_hook(hook)
-            print(f"[DEBUG] register output hook for {name}")
-
-    # fine tune loop
     dataset = CalibrationDataset(dataset_name, calibration_samples)
     g = torch.Generator()
     g.manual_seed(42)
@@ -109,7 +79,14 @@ def rotation_fine_tune(model: nn.Module,
     model.eval()
     for _ in tqdm(range(epochs), leave=False):
         for batch in tqdm(dataloader, leave=False):
-            R1_loss_dict.clear()
+            # Step 1: collect activations under no_grad (no full-model graph retained)
+            activation_dict = {}
+            handles = {}
+            for name, module in model.named_modules():
+                if output_regex.search(name):
+                    hook = collect_activation_hook(name, "output", activation_dict)
+                    handles[name] = module.register_forward_hook(hook)
+
             if model_type == "qwen":
                 processed = [
                     tokenizer.apply_chat_template(
@@ -143,20 +120,35 @@ def rotation_fine_tune(model: nn.Module,
                     padding=True, truncation=True, max_length=max_length
                 ).to(device)
 
-            model(**inputs)
+            with torch.no_grad():
+                model(**inputs)
 
+            for h in handles.values():
+                h.remove()
+            handles.clear()
+            del inputs
+
+            # Step 2: backprop R1 one layernorm at a time (bounded peak memory)
             R1_optimizer.zero_grad()
+            for name, act in activation_dict.items():
+                rot_output = act.float() @ R1.weight.to(act.device)
+                quant_rot_output = activation_quantizer(
+                    (rot_output,),
+                    input_group_size,
+                    activation_quantization_bit,
+                    activation_format=activation_format,
+                )
+                layer_loss = F.mse_loss(rot_output, quant_rot_output)
+                layer_loss.backward()
+                del act, rot_output, quant_rot_output, layer_loss
 
-            gpu_count = torch.cuda.device_count()
-            R1_loss = torch.stack([l.to(f"cuda:{gpu_count - 1}") for m, l in R1_loss_dict.items() if l is not None]).sum()
-
-            # R1 backward
-            R1_loss.backward()
+            activation_dict.clear()
+            torch.cuda.empty_cache()
 
             tqdm.write(f"[DEBUG] rotation matrix gradient: {torch.norm(R1.parametrizations.weight.original.grad)}")
-
             R1_optimizer.step()
     return R1
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="input parser")
