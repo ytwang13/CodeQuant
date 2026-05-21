@@ -7,10 +7,10 @@
 # Steps: 1 | rotation | 2 | cluster | 3 | eval | all (default: all)
 #
 set -euo pipefail
-
+source /home/wyt/miniconda3/bin/activate code
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CONFIG="${CONFIG:-qwen3_4_c2_think.yaml}"
+CONFIG="${CONFIG:-qwen3_4.yaml}"
 STEP="${1:-all}"
 
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"

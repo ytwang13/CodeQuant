@@ -25,7 +25,12 @@ from utils.dataset_utils import CalibrationDataset
 from utils.rotation_utils import fuse_rotation, fuse_weight, load_or_create_R1
 from utils.model_utils import get_model, is_qwen_moe
 from utils.permutation_utils import permutation
-from utils.quantization_utils import group_postfix, r1_checkpoint_filename
+from utils.quantization_utils import (
+    group_postfix,
+    log_activation_quant_config,
+    r1_checkpoint_filename,
+    resolve_fp_data_path,
+)
 
 
 def replace_moe(model: nn.Module,
@@ -410,12 +415,31 @@ if __name__ == "__main__":
     # load rotation R1 (suffix reflects AOS activation quant in common_setting)
     input_group_size = config["common_setting"]["input_group_size"]
     r1_act_format = config["common_setting"].get("activation_quantization_format")
-    rotation_save_path = config["path"]["rotation_data_path"]
+    rotation_save_path = resolve_fp_data_path(
+        config["path"]["rotation_data_path"],
+        "rotation",
+        r1_act_format,
+        input_group_size,
+    )
+    clustering_save_path = resolve_fp_data_path(
+        config["path"]["cluster_data_path"],
+        "cluster",
+        r1_act_format,
+        input_group_size,
+    )
+    print(f"[INFO] rotation cache dir: {rotation_save_path}")
+    print(f"[INFO] cluster cache dir: {clustering_save_path}")
     R1_save_dir = os.path.join(
         rotation_save_path,
         r1_checkpoint_filename(model_type, input_group_size, r1_act_format),
     )
+    print(f"[INFO] loading R1 checkpoint: {R1_save_dir}")
     postfix = group_postfix(input_group_size)
+    log_activation_quant_config(
+        activation_format=r1_act_format,
+        quantization_bit=config["common_setting"]["activation_quantization_bit"],
+        input_group_size=input_group_size,
+    )
     R1 = load_or_create_R1(mode="offline", device=device, save_dir=R1_save_dir)
     R1 = R1.weight.detach()
 
@@ -443,7 +467,6 @@ if __name__ == "__main__":
         # permute_deepseek(model=model, ratio=0.25, final_group_size=config["common_setting"]["weight_group_size"], config=model_config)
 
     # path
-    clustering_save_path = config["path"]["cluster_data_path"]
     os.makedirs(clustering_save_path, exist_ok=True)
 
     # params

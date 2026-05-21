@@ -11,7 +11,10 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from utils.model_utils import is_qwen_moe
-from utils.quantization_utils import int_activation_quantization_pre_hook
+from utils.quantization_utils import (
+    int_activation_quantization_pre_hook,
+    log_activation_quant_config,
+)
 
 
 @torch.no_grad()
@@ -105,7 +108,7 @@ def evaluation(model: nn.Module,
         elif model_type == "deepseek":
             pattern = r".*(q_proj|kv_a_proj_with_mqa|gate|gate_proj|up_proj).*"
         regex = re.compile(pattern)
-        
+        hook_count = 0
         for name, module in model.named_modules():
             if regex.search(name):
                 hook = int_activation_quantization_pre_hook(module_name=name,
@@ -114,6 +117,13 @@ def evaluation(model: nn.Module,
                                                         output_dict=None,
                                                         activation_format=activation_format)
                 module.register_forward_pre_hook(hook)
+                hook_count += 1
+        log_activation_quant_config(
+            activation_format=activation_format,
+            quantization_bit=quantization_bit,
+            input_group_size=input_group_size,
+            hook_count=hook_count,
+        )
 
     ppl_results, task_results, clean_results = evaluate_model(model,
                                                               tokenizer,

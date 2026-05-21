@@ -90,6 +90,53 @@ def group_postfix(group_size: int) -> str:
     return "nongroup" if group_size == -1 else "group"
 
 
+def granularity_dir_tag(input_group_size: int) -> str:
+    """Directory tag for activation granularity: ``perchannel`` / ``perblock``."""
+    return "perchannel" if input_group_size == -1 else "perblock"
+
+
+def fp_experiment_dir_tag(
+    activation_format: Optional[str] = None,
+    input_group_size: int = -1,
+) -> Optional[str]:
+    """
+    Experiment tag for FP activation presets, e.g. ``e4m3_perblock``, ``fp8e4m3_perchannel``.
+    """
+    fmt = _resolve_activation_format(activation_format)
+    if fmt is None:
+        return None
+    return f"{fmt.replace('_', '')}_{granularity_dir_tag(input_group_size)}"
+
+
+_DEFAULT_ROTATION_PATH = "./data/rotation"
+_DEFAULT_CLUSTER_PATHS = ("./data/clustering", "./data/cluster")
+
+
+def resolve_fp_data_path(
+    configured_path: str,
+    kind: str,
+    activation_format: Optional[str] = None,
+    input_group_size: int = -1,
+) -> str:
+    """
+    When ``activation_quantization_format`` is set, map generic cache dirs to dtype-specific ones.
+
+    Examples: ``./data/rotation`` -> ``./data/rotation_e4m3_perblock``;
+    ``./data/clustering`` -> ``./data/cluster_e4m3_perblock``.
+    Non-default paths are left unchanged.
+    """
+    tag = fp_experiment_dir_tag(activation_format, input_group_size)
+    if tag is None:
+        return configured_path
+    if kind == "rotation":
+        if configured_path == _DEFAULT_ROTATION_PATH:
+            return f"./data/rotation_{tag}"
+    elif kind == "cluster":
+        if configured_path in _DEFAULT_CLUSTER_PATHS:
+            return f"./data/cluster_{tag}"
+    return configured_path
+
+
 def activation_cache_suffix(activation_format: Optional[str] = None) -> str:
     """
     Filename suffix for R1 checkpoints tied to activation fake-quant during AOS.
@@ -102,14 +149,24 @@ def activation_cache_suffix(activation_format: Optional[str] = None) -> str:
     return f"_act_{fmt.replace('_', '')}"
 
 
+def rotation_lr_suffix(fine_tune_lr: Optional[float] = None) -> str:
+    """Filename suffix for R1 checkpoints keyed by AOS learning rate."""
+    if fine_tune_lr is None:
+        return ""
+    lr_str = format(fine_tune_lr, "f").rstrip("0").rstrip(".")
+    return f"_lr{lr_str}"
+
+
 def r1_checkpoint_filename(
     model_type: str,
     input_group_size: int,
     activation_format: Optional[str] = None,
+    fine_tune_lr: Optional[float] = None,
 ) -> str:
     postfix = group_postfix(input_group_size)
     act_suffix = activation_cache_suffix(activation_format)
-    return f"{model_type}_r1_{postfix}{act_suffix}.pt"
+    lr_suffix = rotation_lr_suffix(fine_tune_lr)
+    return f"{model_type}_r1_{postfix}{act_suffix}{lr_suffix}.pt"
 
 
 def float_group_quantizer(tensor: torch.Tensor,
@@ -152,3 +209,45 @@ def weight_quantizer(weight: torch.Tensor,
     quant_weight = degroup(quant_group_weight, group_size, weight.shape)
 
     return quant_weight
+
+
+def log_activation_quant_config(
+    activation_format: Optional[str] = None,
+    quantization_bit: int = 4,
+    input_group_size: int = -1,
+    hook_count: Optional[int] = None,
+    verify: bool = True,
+) -> bool:
+    """
+    Log activation quant settings and optionally sanity-check that quant changes values.
+    """
+    fmt = _resolve_activation_format(activation_format)
+    label = fmt if fmt is not None else f"int{quantization_bit}"
+    gran = granularity_dir_tag(input_group_size)
+    print(
+        f"[INFO] activation quant: format={label}, granularity={gran} "
+        f"(input_group_size={input_group_size})"
+    )
+    if hook_count is not None:
+        print(f"[INFO] activation quant hooks registered: {hook_count}")
+    if not verify:
+        return True
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    x = torch.randn(4, max(input_group_size, 32), device=device)
+    gs = input_group_size if input_group_size > 0 else x.shape[-1]
+    q = activation_quantizer(
+        (x,),
+        group_size=gs,
+        quantization_bit=quantization_bit,
+        activation_format=activation_format,
+    )
+    changed = not torch.allclose(x, q, rtol=0.0, atol=0.0)
+    max_err = (x - q).abs().max().item()
+    ok = changed
+    status = "ok" if ok else "WARN (quant output identical to input)"
+    print(
+        f"[INFO] activation quant verify [{status}]: max_abs_err={max_err:.6g}, "
+        f"values_changed={changed}"
+    )
+    return ok

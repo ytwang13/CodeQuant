@@ -99,7 +99,7 @@ Based on `qwen3_4.yaml`. Each preset sets `activation_quantization_format` in `c
 | `qwen3_4_act_nvfp4_{perchannel,perblock}` | NVFP4 E2M1 | `-1` / `128` |
 | `qwen3_4_act_nvfp4_plus_{perchannel,perblock}` | NVFP4 + FP8 scale | `-1` / `128` |
 
-Example: `python evaluation_script.py --config qwen3_4_act_fp8_e4m3_perchannel.yaml` (from `script/`). R1 cache: `qwen_r1_nongroup_act_fp8e4m3.pt` (perchannel) or `qwen_r1_group_act_fp8e4m3.pt` (perblock).
+Example: `python evaluation_script.py --config qwen3_4_act_fp8_e4m3_perchannel.yaml` (from `script/`). With `activation_quantization_format` set, generic `./data/rotation` and `./data/clustering` resolve to dtype-specific dirs (e.g. `./data/rotation_fp8e4m3_perchannel`, `./data/cluster_fp8e4m3_perblock`). R1 filename inside the rotation dir: `qwen_r1_nongroup_act_fp8e4m3.pt` (perchannel) or `qwen_r1_group_act_fp8e4m3.pt` (perblock).
 
 
 ## 📚Citation

@@ -19,6 +19,12 @@ from utils.permutation_utils import permutation
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="input parser")
     parser.add_argument('--config', type=str, required=True, help='config file name')
+    parser.add_argument(
+        '--rotation-lr',
+        type=float,
+        default=None,
+        help='rotation fine_tune_lr used for R1 checkpoint lookup (default: config rotation.fine_tune_lr)',
+    )
     args = parser.parse_args()
 
     with open(f"../configs/{args.config}", "r", encoding="utf-8") as f:
@@ -74,9 +80,20 @@ if __name__ == "__main__":
         r1_act_format,
         input_group_size,
     )
+    rotation_lr = (
+        args.rotation_lr
+        if args.rotation_lr is not None
+        else config["rotation"]["fine_tune_lr"]
+    )
+    print(f"[INFO] rotation fine_tune_lr: {rotation_lr}")
     R1_save_dir = os.path.join(
         rotation_save_path,
-        r1_checkpoint_filename(model_type, input_group_size, r1_act_format),
+        r1_checkpoint_filename(
+            model_type,
+            input_group_size,
+            r1_act_format,
+            fine_tune_lr=rotation_lr,
+        ),
     )
     print(f"[INFO] rotation cache dir: {rotation_save_path}")
     print(f"[INFO] cluster cache dir: {cluster_save_path}")
@@ -100,24 +117,6 @@ if __name__ == "__main__":
     fuse_rotation(model, model_type, R1_per_gpu, None)
     print(f"[INFO] model {model_name} rotation matrix fused.")
     del R1, R1_per_gpu
-
-    ## permutation
-    if config["cluster"]["permutation"]:
-        permutation(model, model_type, model_config, config["common_setting"]["weight_group_size"])
-    # permutation(model, model_type, model_config)
-
-    # weight group size
-    weight_group_size = config["common_setting"]["weight_group_size"]
-    if weight_group_size == -1:
-        cluster_postfix = "nongroup"
-    else:
-        cluster_postfix = "group"
-
-    # replace model weight
-    cluster_ckpt = os.path.join(cluster_save_path, f"{model_type}_clustering_weight_dict_{postfix}.pt")
-    cluster_weight_dict = torch.load(cluster_ckpt, weights_only=False)
-    replace_model_weight(model, cluster_weight_dict)
-    print(f"[DEBUG] model weight replaced from {cluster_ckpt}.")
 
     ppl_results, task_results, clean_results = evaluation(model=model,
                                                           model_type=model_type,

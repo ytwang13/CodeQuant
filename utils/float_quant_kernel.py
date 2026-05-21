@@ -71,10 +71,12 @@ def float_exmy_quantize_torch(
     ceil: bool = False,
 ) -> torch.Tensor:
     sign, x_abs = x.sign(), x.abs()
+    tiny = x_abs < SCALE_MIN_THRES
+    x_abs = x_abs.clamp(min=SCALE_MIN_THRES)
     elow = -(2 ** (e_bit - 1)) + 2
     ehigh = 2 ** (e_bit - 1)
     mhigh = 2**m_bit
-    expo = torch.floor(torch.log2(x_abs.clamp(min=0.0)))
+    expo = torch.floor(torch.log2(x_abs))
     expo = torch.clamp(expo, min=elow, max=ehigh)
     mant = x_abs / torch.exp2(expo)
     mant_int = torch.floor(mant)
@@ -86,7 +88,8 @@ def float_exmy_quantize_torch(
     else:
         mant_frac = torch.round(mant_frac)
     mant_q = mant_int + mant_frac / mhigh
-    return (sign * torch.exp2(expo) * mant_q).to(x.dtype)
+    out = (sign * torch.exp2(expo) * mant_q).to(x.dtype)
+    return torch.where(tiny, torch.zeros_like(out), out)
 
 
 def fp8_grid_cast_torch(x: torch.Tensor, fmt: str) -> torch.Tensor:

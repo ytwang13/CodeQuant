@@ -14,7 +14,12 @@ from tqdm import tqdm
 
 from utils.rotation_utils import load_or_create_R1, create_optimizer
 from utils.dataset_utils import CalibrationDataset
-from utils.quantization_utils import activation_quantizer, r1_checkpoint_filename
+from utils.quantization_utils import (
+    activation_quantizer,
+    log_activation_quant_config,
+    r1_checkpoint_filename,
+    resolve_fp_data_path,
+)
 from utils.rotation_utils import fuse_weight
 from utils.model_utils import get_model
 
@@ -132,20 +137,28 @@ def rotation_fine_tune(model: nn.Module,
             R1_optimizer.zero_grad()
             for name, act in activation_dict.items():
                 rot_output = act.float() @ R1.weight.to(act.device)
-                quant_rot_output = activation_quantizer(
+                # Detach quant target: grad is 2*(rot-q)/n without backprop through fake-quant.
+                quant_target = activation_quantizer(
                     (rot_output,),
                     input_group_size,
                     activation_quantization_bit,
                     activation_format=activation_format,
-                )
-                layer_loss = F.mse_loss(rot_output, quant_rot_output)
+                ).detach()
+                layer_loss = F.mse_loss(rot_output, quant_target)
                 layer_loss.backward()
-                del act, rot_output, quant_rot_output, layer_loss
+                del act, rot_output, quant_target, layer_loss
 
             activation_dict.clear()
             torch.cuda.empty_cache()
 
-            tqdm.write(f"[DEBUG] rotation matrix gradient: {torch.norm(R1.parametrizations.weight.original.grad)}")
+            r1_param = R1.parametrizations.weight.original
+            grad = r1_param.grad
+            if grad is None or not torch.isfinite(grad).all():
+                tqdm.write("[WARN] skipping R1 optimizer step: non-finite gradient")
+                R1_optimizer.zero_grad()
+                continue
+            torch.nn.utils.clip_grad_norm_([r1_param], max_norm=1.0)
+            tqdm.write(f"[DEBUG] rotation matrix gradient: {torch.norm(grad)}")
             R1_optimizer.step()
     return R1
 
@@ -153,6 +166,12 @@ def rotation_fine_tune(model: nn.Module,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="input parser")
     parser.add_argument('--config', type=str, required=True, help='config file name')
+    parser.add_argument(
+        '--rotation-lr',
+        type=float,
+        default=None,
+        help='override rotation.fine_tune_lr from config (also used in R1 checkpoint name)',
+    )
     args = parser.parse_args()
 
     with open(f"../configs/{args.config}", "r", encoding="utf-8") as f:
@@ -178,15 +197,28 @@ if __name__ == "__main__":
     common_params = config["common_setting"]
     dataset_name = config["calibration"]["dataset_name"]
     rotate_params = config["rotation"]
+    rotation_lr = (
+        args.rotation_lr
+        if args.rotation_lr is not None
+        else rotate_params["fine_tune_lr"]
+    )
+    print(f"[INFO] rotation fine_tune_lr: {rotation_lr}")
 
     # path
-    save_path = config["path"]["rotation_data_path"]
-    os.makedirs(save_path, exist_ok=True)
-
-    # run
     activation_quantization_format = common_params.get("activation_quantization_format")
-    if activation_quantization_format:
-        print(f'[INFO] activation quantization format: {activation_quantization_format}')
+    save_path = resolve_fp_data_path(
+        config["path"]["rotation_data_path"],
+        "rotation",
+        activation_quantization_format,
+        common_params["input_group_size"],
+    )
+    os.makedirs(save_path, exist_ok=True)
+    print(f"[INFO] rotation cache dir: {save_path}")
+    log_activation_quant_config(
+        activation_format=activation_quantization_format,
+        quantization_bit=common_params["activation_quantization_bit"],
+        input_group_size=common_params["input_group_size"],
+    )
 
     r1 = rotation_fine_tune(model=model,
                             model_type=model_type,
@@ -200,13 +232,14 @@ if __name__ == "__main__":
                             batch_size=rotate_params["batch_size"],
                             max_length=rotate_params["max_length"],
                             epochs=rotate_params["epochs"],
-                            lr=rotate_params["fine_tune_lr"],
+                            lr=rotation_lr,
                             device=device)
 
     r1_ckpt_name = r1_checkpoint_filename(
         model_type,
         common_params["input_group_size"],
         activation_quantization_format,
+        fine_tune_lr=rotation_lr,
     )
     r1_ckpt = {
         "r1": r1.cpu().state_dict(),
