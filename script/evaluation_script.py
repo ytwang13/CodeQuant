@@ -7,6 +7,7 @@ import torch
 
 from utils.evaluation_utils import evaluation
 from utils.quantization_utils import (
+    cluster_artifact_filename,
     group_postfix,
     r1_checkpoint_filename,
     resolve_fp_data_path,
@@ -19,6 +20,18 @@ from utils.permutation_utils import permutation
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="input parser")
     parser.add_argument('--config', type=str, required=True, help='config file name')
+    parser.add_argument(
+        '--rotation-lr',
+        type=float,
+        default=None,
+        help='rotation fine_tune_lr for R1 checkpoint lookup (default: config rotation.fine_tune_lr)',
+    )
+    parser.add_argument(
+        '--cluster-lr',
+        type=float,
+        default=None,
+        help='cluster fine_tune_lr for cluster artifact lookup (default: config cluster.fine_tune_lr; suffix when set)',
+    )
     args = parser.parse_args()
 
     with open(f"../configs/{args.config}", "r", encoding="utf-8") as f:
@@ -74,9 +87,27 @@ if __name__ == "__main__":
         r1_act_format,
         input_group_size,
     )
+    rotation_lr = (
+        args.rotation_lr
+        if args.rotation_lr is not None
+        else config["rotation"]["fine_tune_lr"]
+    )
+    cluster_lr = (
+        args.cluster_lr
+        if args.cluster_lr is not None
+        else config["cluster"]["fine_tune_lr"]
+    )
+    cluster_lr_for_name = cluster_lr
+    print(f"[INFO] rotation fine_tune_lr: {rotation_lr}")
+    print(f"[INFO] cluster fine_tune_lr: {cluster_lr}")
     R1_save_dir = os.path.join(
         rotation_save_path,
-        r1_checkpoint_filename(model_type, input_group_size, r1_act_format),
+        r1_checkpoint_filename(
+            model_type,
+            input_group_size,
+            r1_act_format,
+            fine_tune_lr=rotation_lr,
+        ),
     )
     print(f"[INFO] rotation cache dir: {rotation_save_path}")
     print(f"[INFO] cluster cache dir: {cluster_save_path}")
@@ -114,7 +145,12 @@ if __name__ == "__main__":
         cluster_postfix = "group"
 
     # replace model weight
-    cluster_ckpt = os.path.join(cluster_save_path, f"{model_type}_clustering_weight_dict_{postfix}.pt")
+    cluster_ckpt = os.path.join(
+        cluster_save_path,
+        cluster_artifact_filename(
+            model_type, input_group_size, "clustering_weight_dict", cluster_lr_for_name
+        ),
+    )
     cluster_weight_dict = torch.load(cluster_ckpt, weights_only=False)
     replace_model_weight(model, cluster_weight_dict)
     print(f"[DEBUG] model weight replaced from {cluster_ckpt}.")

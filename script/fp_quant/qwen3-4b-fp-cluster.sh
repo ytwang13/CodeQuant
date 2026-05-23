@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# CodeQuant FP activation pipeline for configs/act_fp_quant/qwen3_4_act_*.yaml
+# CodeQuant FP activation pipeline for configs/act_fp_quant_clus/qwen3_4_act_*.yaml
 #
 # Run from anywhere:
 #   bash script/fp_quant/qwen3-4b-fp.sh [preset|config] [step]
-#   CONFIG=act_fp_quant/qwen3_4_act_e4m3_perblock.yaml bash script/fp_quant/qwen3-4b-fp.sh all
+#   CONFIG=act_fp_quant_clus/qwen3_4_act_e4m3_perblock.yaml bash script/fp_quant/qwen3-4b-fp.sh all
 #
-# Preset shorthand (maps to act_fp_quant/qwen3_4_act_<preset>.yaml):
+# Preset shorthand (maps to act_fp_quant_clus/qwen3_4_act_<preset>.yaml):
 #   fp8_e4m3_perchannel, e4m3_perblock, nvfp4_plus_perblock, ...
 #
 # Steps: 1 | rotation | 2 | cluster | 3 | eval | all (default: all)
@@ -29,7 +29,7 @@ VALID_STEPS="1|rotation|aos|2|cluster|accf|3|eval|evaluation|all"
 resolve_config() {
   local arg="${1:-}"
   if [[ -z "${arg}" ]]; then
-    echo "${CONFIG:-act_fp_quant/qwen3_4_act_fp8_e4m3_perchannel.yaml}"
+    echo "${CONFIG:-act_fp_quant_clus/qwen3_4_act_fp8_e4m3_perchannel.yaml}"
     return
   fi
   if [[ "${arg}" == */* ]]; then
@@ -37,10 +37,10 @@ resolve_config() {
     return
   fi
   if [[ "${arg}" == *.yaml ]]; then
-    echo "act_fp_quant/${arg}"
+    echo "act_fp_quant_clus/${arg}"
     return
   fi
-  echo "act_fp_quant/qwen3_4_act_${arg}.yaml"
+  echo "act_fp_quant_clus/qwen3_4_act_${arg}.yaml"
 }
 
 is_step() {
@@ -62,7 +62,7 @@ elif [[ $# -ge 1 ]] && config_exists "${1}"; then
   STEP="${2:-all}"
 elif [[ $# -ge 1 ]]; then
   echo "Unknown preset or config: ${1}" >&2
-  echo "Expected act_fp_quant preset (e.g. e4m3_perblock) or step: ${VALID_STEPS}" >&2
+  echo "Expected act_fp_quant_clus preset (e.g. e4m3_perblock) or step: ${VALID_STEPS}" >&2
   exit 1
 else
   CONFIG="$(resolve_config "")"

@@ -12,16 +12,17 @@ FP_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${FP_SCRIPT_DIR}/../.." && pwd)"
 RUNNER="${FP_SCRIPT_DIR}/qwen3-4b-fp.sh"
 
-STEP="${STEP:-all}"
+STEP="${STEP:-3}"
 LOG_DIR="${LOG_DIR:-${REPO_ROOT}/log/fp_forloop}"
 
 PRESETS=(
-  fp8_e4m3_perchannel
+  # fp8_e4m3_perchannel
   e4m3_perchannel
   nvfp4_perchannel
   nvfp4_plus_perchannel
 )
-GPUS=(0 1 2 3)
+# GPUS=(0 1 2 3)
+GPUS=(1 2 3)
 
 if (( ${#PRESETS[@]} != ${#GPUS[@]} )); then
   echo "PRESETS and GPUS must have the same length" >&2

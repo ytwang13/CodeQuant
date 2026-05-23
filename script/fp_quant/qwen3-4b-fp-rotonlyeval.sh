@@ -10,9 +10,6 @@
 #
 # Steps: 1 | rotation | 2 | cluster | 3 | eval | all (default: all)
 #
-# Optional LR overrides (also used by run_fp_forloop_cluster.sh):
-#   ROTATION_LR=0.00001 CLUSTER_LR=0.0001 bash script/fp_quant/qwen3-4b-fp.sh fp8_e4m3_perchannel cluster
-#
 set -euo pipefail
 source /home/wyt/miniconda3/bin/activate code
 
@@ -78,33 +75,21 @@ cd "${SCRIPT_DIR}"
 
 run_rotation() {
   echo "=== Step 1: AOS rotation fine-tune (${CONFIG}) ==="
-  local -a extra_args=()
-  if [[ -n "${ROTATION_LR:-}" ]]; then
-    extra_args+=(--rotation-lr "${ROTATION_LR}")
-  fi
-  python rotation_fine_tune_script.py --config "${CONFIG}" "${extra_args[@]}"
+  python rotation_fine_tune_script.py --config "${CONFIG}"
 }
 
 run_cluster() {
   echo "=== Step 2: ACCF cluster fine-tune (${CONFIG}) ==="
-  local -a extra_args=()
-  [[ -n "${ROTATION_LR:-}" ]] && extra_args+=(--rotation-lr "${ROTATION_LR}")
-  [[ -n "${CLUSTER_LR:-}" ]] && extra_args+=(--cluster-lr "${CLUSTER_LR}")
-  python cluster_fine_tune_script.py --config "${CONFIG}" "${extra_args[@]}"
+  python cluster_fine_tune_script.py --config "${CONFIG}"
 }
 
 run_eval() {
   echo "=== Step 3: evaluation (${CONFIG}) ==="
-  local -a extra_args=()
-  [[ -n "${ROTATION_LR:-}" ]] && extra_args+=(--rotation-lr "${ROTATION_LR}")
-  [[ -n "${CLUSTER_LR:-}" ]] && extra_args+=(--cluster-lr "${CLUSTER_LR}")
-  python evaluation_script.py --config "${CONFIG}" "${extra_args[@]}"
+  python evaluation_script_rotonly.py --config "${CONFIG}"
 }
 # script/evaluation_script_rotonly.py
 # evaluation_script
 echo "[INFO] CONFIG=${CONFIG} STEP=${STEP}"
-[[ -n "${ROTATION_LR:-}" ]] && echo "[INFO] ROTATION_LR=${ROTATION_LR}"
-[[ -n "${CLUSTER_LR:-}" ]] && echo "[INFO] CLUSTER_LR=${CLUSTER_LR}"
 
 case "${STEP}" in
   1|rotation|aos)

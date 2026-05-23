@@ -169,6 +169,18 @@ def r1_checkpoint_filename(
     return f"{model_type}_r1_{postfix}{act_suffix}{lr_suffix}.pt"
 
 
+def cluster_artifact_filename(
+    model_type: str,
+    input_group_size: int,
+    stem: str,
+    fine_tune_lr: Optional[float] = None,
+) -> str:
+    """Filename for ACCF cluster artifacts (optionally keyed by cluster fine_tune_lr)."""
+    postfix = group_postfix(input_group_size)
+    lr_suffix = rotation_lr_suffix(fine_tune_lr)
+    return f"{model_type}_{stem}_{postfix}{lr_suffix}.pt"
+
+
 def float_group_quantizer(tensor: torch.Tensor,
                           mask: torch.Tensor,
                           activation_format: str,

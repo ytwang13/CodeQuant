@@ -26,6 +26,7 @@ from utils.rotation_utils import fuse_rotation, fuse_weight, load_or_create_R1
 from utils.model_utils import get_model, is_qwen_moe
 from utils.permutation_utils import permutation
 from utils.quantization_utils import (
+    cluster_artifact_filename,
     group_postfix,
     log_activation_quant_config,
     r1_checkpoint_filename,
@@ -391,6 +392,18 @@ def clustering(model: nn.Module,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="input parser")
     parser.add_argument('--config', type=str, required=True, help='config file name')
+    parser.add_argument(
+        '--rotation-lr',
+        type=float,
+        default=None,
+        help='rotation fine_tune_lr for R1 checkpoint lookup (default: config rotation.fine_tune_lr)',
+    )
+    parser.add_argument(
+        '--cluster-lr',
+        type=float,
+        default=None,
+        help='override cluster.fine_tune_lr from config (also used in cluster artifact names when set)',
+    )
     args = parser.parse_args()
 
     with open(f"../configs/{args.config}", "r", encoding="utf-8") as f:
@@ -427,11 +440,22 @@ if __name__ == "__main__":
         r1_act_format,
         input_group_size,
     )
+    rotation_lr = (
+        args.rotation_lr
+        if args.rotation_lr is not None
+        else config["rotation"]["fine_tune_lr"]
+    )
+    print(f"[INFO] rotation fine_tune_lr: {rotation_lr}")
     print(f"[INFO] rotation cache dir: {rotation_save_path}")
     print(f"[INFO] cluster cache dir: {clustering_save_path}")
     R1_save_dir = os.path.join(
         rotation_save_path,
-        r1_checkpoint_filename(model_type, input_group_size, r1_act_format),
+        r1_checkpoint_filename(
+            model_type,
+            input_group_size,
+            r1_act_format,
+            fine_tune_lr=rotation_lr,
+        ),
     )
     print(f"[INFO] loading R1 checkpoint: {R1_save_dir}")
     postfix = group_postfix(input_group_size)
@@ -472,18 +496,35 @@ if __name__ == "__main__":
     # params
     common_params = config["common_setting"]
     cluster_params = config["cluster"]
-
-    # weight group size
-    weight_group_size = config["common_setting"]["weight_group_size"]
-    if weight_group_size == -1:
-        cluster_postfix = "nongroup"
-    else:
-        cluster_postfix = "group"
+    cluster_lr = (
+        args.cluster_lr
+        if args.cluster_lr is not None
+        else cluster_params["fine_tune_lr"]
+    )
+    cluster_lr_for_name = cluster_lr
+    print(f"[INFO] cluster fine_tune_lr: {cluster_lr}")
+    cluster_work_dir = clustering_save_path
+    if cluster_lr_for_name is not None:
+        lr_label = format(cluster_lr_for_name, "f").rstrip("0").rstrip(".")
+        cluster_work_dir = os.path.join(clustering_save_path, f"_accf_scratch_lr{lr_label}")
+        os.makedirs(cluster_work_dir, exist_ok=True)
+        print(f"[INFO] cluster scratch dir: {cluster_work_dir}")
 
     # save names
-    clustering_weight_save_path = os.path.join(clustering_save_path, f"{model_type}_clustering_weight_dict_{postfix}.pt")
-    centroid_save_path = os.path.join(clustering_save_path, f"{model_type}_centroid_dict_{postfix}.pt")
-    assignment_save_path = os.path.join(clustering_save_path, f"{model_type}_assignment_dict_{postfix}.pt")
+    clustering_weight_save_path = os.path.join(
+        clustering_save_path,
+        cluster_artifact_filename(
+            model_type, input_group_size, "clustering_weight_dict", cluster_lr_for_name
+        ),
+    )
+    centroid_save_path = os.path.join(
+        clustering_save_path,
+        cluster_artifact_filename(model_type, input_group_size, "centroid_dict", cluster_lr_for_name),
+    )
+    assignment_save_path = os.path.join(
+        clustering_save_path,
+        cluster_artifact_filename(model_type, input_group_size, "assignment_dict", cluster_lr_for_name),
+    )
 
     # run
     cluster_weight_dict, centroid_dict, assignment_dict = clustering(model=model,
@@ -496,8 +537,8 @@ if __name__ == "__main__":
                                                                      calibration_samples=cluster_params["max_sample"],
                                                                      batch_size=cluster_params["batch_size"],
                                                                      max_length=cluster_params["max_length"],
-                                                                     fine_tune_lr=cluster_params["fine_tune_lr"],
-                                                                     save_dir_cluster=clustering_save_path,
+                                                                     fine_tune_lr=cluster_lr,
+                                                                     save_dir_cluster=cluster_work_dir,
                                                                      epochs=cluster_params["epochs"],
                                                                      device=device)
     torch.save(cluster_weight_dict, clustering_weight_save_path)
